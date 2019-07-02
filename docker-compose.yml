@@ -1,0 +1,33 @@
+version: '2'
+services:
+
+  worker:
+    build: .
+    environment:
+      PG_DATABASE: ${PG_DATABASE}
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - ./:/workspace
+
+  postgres:
+    image: mdillon/postgis:10
+    environment:
+      POSTGRES_DB: ${PG_DATABASE}
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      - ./data:/data
+      - ./db:/init
+
+  pgweb:
+    image: sosedoff/pgweb
+    command: pgweb --readonly --bind=0.0.0.0 --listen=8081
+    ports: ["8000:8081"]
+    links:
+      - postgres:postgres
+    environment:
+      - DATABASE_URL=postgres://${PG_USER}:${PG_PASSWORD}@postgres:5432/${PG_DATABASE}?sslmode=disable
+    depends_on:
+      - postgres
