@@ -17,21 +17,23 @@ conn = psycopg2.connect("dbname='" + os.environ["PG_DATABASE"] + "' user='" + os
 conn.autocommit = True
 cur = conn.cursor()
 
-def replaceSpecialChars(string):
-    return filter(lambda x: x in printable, string)
+def is_number(s):
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
 
-def replaceAccents(string):
-    string = string.replace("é","e")
-    string = string.replace("ê","e")
-    string = string.replace("è","e")
-    string = string.replace("à","a")
-    string = string.replace("â","a")
-    string = string.replace("Â","A")
-    string = string.replace("ù","u")
-    string = string.replace("ô","o")
-    string = string.replace("î","i")
-    string = string.replace("ï","i")
-    return string
+def replaceSpecialChars(string):
+    try:
+        #sometimes string is a numeric, I dunno why. We can't use str all the time since it crashes with special chars
+        if is_number(string):
+            string = str(string)
+        return filter(lambda x: x in printable, string)
+    except:
+        print(type(string))
+        print(string)
+        raise ValueError("Error with replaceSpecialChars")
 
 def replaceCharForColumns(string):
     string = string.replace("-","_")
@@ -41,24 +43,8 @@ def replaceCharForColumns(string):
     string = string.replace(")","_")
     return string
 
-def translateDate(string):
-    try:
-        string = string.lower()
-    except Exception as e:
-        print(e)
-        print(string)
-        raise Exception("pb with str.lower")
-    string = replaceSpecialChars(string)
-    months_fr = ["janvier","fvrier","fevrier","mars","avril","mai","juin","juillet","aout","aot","septembre","octobre","novembre","dcembre","decembre"]
-    months_en = ["january","february","february","march","april","may","june","july","august","august","september","october","november","december","december"]
-    for k in range(0,len(months_fr)):
-        month_fr = months_fr[k]
-        month_en = months_en[k]
-        if month_fr in string:
-            string = string.replace(month_fr,month_en)
-    return string
 
-def processLine(line,headers_types):
+def processLine(line, headers_types):
     if len(line) != len(headers_types):
         print(len(line))
         print(len(headers_types))
@@ -71,7 +57,9 @@ def processLine(line,headers_types):
         type = headers_types[k]
         if elt == "":
             elt2 = "NULL"
-        elif type["name"] == "NUMERIC":
+        elif pd.isna(elt): #for NaT and NaN
+            elt2 = "NULL"
+        elif type == "float64" or type == "int64":
             if isinstance(elt, basestring):
                 if "," in elt:
                     try:
@@ -87,62 +75,79 @@ def processLine(line,headers_types):
                         raise Exception("Error parse float")
             else:
                 elt2 = elt
-        elif type["name"] == "TIMESTAMP" or type["name"] == "INTERVAL" or type["name"] == "DATE":
-            elt = translateDate(elt)
-            format = type["format"]
-            try:
-                elt2 = datetime.strptime(elt, format)
-            except Exception as e:
-                print(elt)
-                print(format)
-                print(e)
-                raise Exception("Error parsing datetime")
-        elif type["name"] == "TEXT":
-            #this str() caused unicode errors
-            #elt = str(elt)
+        elif type == "datetime64[ns]":
+            elt2 = elt
+        elif type == "object":
             elt2 = replaceSpecialChars(elt)
-        else: #type TIME and all the rest
-            #NOTE: for TIME type we don't use datetime.Strptime since it does not parse time of day, only datetime
+        else:
             elt2 = elt
         line2.append(elt2)
     return line2
 
 #NOTE: panda can read directly from excel file, and seems to be pretty good at recognizing types
-def processExcelFile(excel_file, sheet_name, table, create_table):
+def processExcelFile(excel_file, sheet_name, table, create_table, offset):
 
     #we read data
-    data = pd.read_excel(excel_file, sheet_name=sheet_name)
+    print("Reading Excel data...")
+    data = pd.read_excel(excel_file, sheet_name=sheet_name, encoding='utf-8')
+    print("Finished reading excel data.")
     headers = []
     for header in data.columns:
         headers.append(header)
-    headers_types = []
-    for type in data.dtypes:
+    print("Detected headers types:")
+    print(data.dtypes)
+
+    print("headers:")
+    print(headers)
+
+    #we force all columns to contain only theoretical column dtype
+    print("Forcing columns types...")
+    for k in range(0,len(headers)):
+        header = headers[k]
+        type = data.dtypes[k]
+        if type == "float64" or type == "int64":
+            data[header] = pd.to_numeric(data[header], errors='coerce')
+        if type == "datetime64[ns]":
+            data[header] = pd.to_datetime(data[header], errors='coerce')
         if type == "object":
-            headers_types.append({"name": "TEXT"})
-        if type == "float64":
-            headers_types.append({"name": "NUMERIC"})
-        if type == "int64":
-            headers_types.append({"name": "NUMERIC"})
+            data = data.astype({header:unicode})
+
 
     #we create table in DB
     if create_table == True:
         command = "CREATE TABLE " + table + " (id BIGSERIAL PRIMARY KEY," + "\n"
         for k in range(0,len(headers)-1):
             header = replaceCharForColumns(headers[k])
-            type = headers_types[k]
-            command = command + header + " " + type["name"] + "," + "\n"
+            if data.dtypes[k] == "float64" or data.dtypes[k] == "int64":
+                type = "NUMERIC"
+            elif data.dtypes[k] == "object":
+                type = "TEXT"
+            elif data.dtypes[k] == "datetime64[ns]":
+                type = "TIMESTAMP"
+            else:
+                type = "TEXT"
+            command = command + header + " " + type + "," + "\n"
         header = replaceCharForColumns(headers[len(headers)-1])
-        type = headers_types[len(headers)-1]
-        command = command + header + " " + type["name"] + "" + "\n"
+        if data.dtypes[len(headers)-1] == "float64" or data.dtypes[len(headers)-1] == "int64":
+            type = "NUMERIC"
+        elif data.dtypes[len(headers)-1] == "object":
+            type = "TEXT"
+        elif data.dtypes[len(headers)-1] == "datetime64[ns]":
+            type = "TIMESTAMP"
+        else:
+            type = "TEXT"
+        command = command + header + " " + type + "" + "\n"
         command = command + ");"
         print(command)
         cur.execute(command)
 
     counter = 0
     for index, line in data.iterrows():
-        print(counter)
-        line2 = processLine(line,headers_types)
-        print(line2)
+        counter = counter + 1
+        if (counter < offset):
+            continue
+        line2 = processLine(line, data.dtypes)
+        #print(line2)
         stri = "(DEFAULT,"
         for k in range(0,len(headers)-1):
             stri = stri + "%s,"
@@ -158,7 +163,6 @@ def processExcelFile(excel_file, sheet_name, table, create_table):
             print(args_str)
             print(e)
             raise Exception("Error with DB insertion")
-        counter = counter + 1
 
 
 def drawCorr(df,name,method):
