@@ -4,7 +4,9 @@ This repo refers to blog post: https://fruty.io/2019/07/02/excel-to-pandas-to-po
 ### TEST
 
 Start the containers.
+
 docker-compose up -d
+
 Pgweb container often starts too soon compared to postgres, you might have to run
 another docker-compose up -d once postgres had time to start.
 The worker container is in exit mode, that's normal, it's not supposed to be running all the time.
