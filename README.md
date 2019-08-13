@@ -12,7 +12,9 @@ another docker-compose up -d once postgres had time to start.
 The worker container is in exit mode, that's normal, it's not supposed to be running all the time.
 
 When postgres and pgweb containers are up, log into the worker container:
+
 docker-compose run worker /bin/bash
+
 Now import the excel spreadsheet into postgres:
 python insert.py
 exit
